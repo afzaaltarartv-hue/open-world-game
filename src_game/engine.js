@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
-// Global Game State
+// Global Game State Constants
 const GAME_STATE = {
   IDLE: 'IDLE',
   WALK: 'WALK',
@@ -12,13 +12,13 @@ const GAME_STATE = {
 
 class OpenWorldGame {
   constructor() {
-    this.container = document.getElementById('game-container');
+    this.container = document.getElementById('game-container') || document.getElementById('canvas-container') || document.body;
     this.clock = new THREE.Clock();
 
     // Scene & Renderer
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x87ceeb); // Sky blue
-    this.scene.fog = new THREE.FogExp2(0x87ceeb, 0.012);
+    this.scene.background = new THREE.Color(0x7ec0ee); // Sky blue
+    this.scene.fog = new THREE.FogExp2(0x7ec0ee, 0.012);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
@@ -27,9 +27,22 @@ class OpenWorldGame {
       500
     );
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    try {
+      this.renderer = new THREE.WebGLRenderer({
+        antialias: false,
+        powerPreference: 'low-power',
+        failIfMajorPerformanceCaveat: false,
+        precision: 'mediump',
+        alpha: false,
+        stencil: false,
+        depth: true
+      });
+    } catch (e) {
+      console.warn('Fallback WebGLRenderer initialization:', e);
+      this.renderer = new THREE.WebGLRenderer();
+    }
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -38,23 +51,21 @@ class OpenWorldGame {
 
     // Player Physics & Transform
     this.player = new THREE.Group();
-    this.player.position.set(0, 0, 0);
+    // Spawn at open plaza space, looking towards the plaza center
+    this.player.position.set(0, 0.1, 14);
     this.scene.add(this.player);
 
-    this.playerVelocity = new THREE.Vector3();
     this.verticalVelocity = 0;
     this.isGrounded = true;
-    this.playerRadius = 0.45;
-    this.playerHeight = 1.8;
-    this.targetRotation = 0;
-    this.moveSpeed = 4.2;
+    this.playerRadius = 0.5;
+    this.moveSpeed = 4.8;
 
     // Controls Input State
     this.inputVector = new THREE.Vector2(0, 0);
-    this.cameraYaw = 0;
-    this.cameraPitch = 0.25; // slightly looking down
-    this.cameraDistance = 4.2;
-    this.targetCameraDistance = 4.2;
+    this.smoothedInput = new THREE.Vector2(0, 0);
+    this.cameraYaw = Math.PI; // Face forward into the open plaza
+    this.cameraPitch = 0.28; // looking slightly down
+    this.cameraDistance = 4.5;
 
     // Combat & Animation State Machine
     this.currentState = GAME_STATE.IDLE;
@@ -62,7 +73,6 @@ class OpenWorldGame {
     this.attackLockTimer = 0;
     this.currentAttackDuration = 0;
     this.attackProgress = 0;
-    this.comboCount = 0;
 
     // Animation System
     this.mixer = null;
@@ -73,8 +83,6 @@ class OpenWorldGame {
 
     // Environment Colliders
     this.colliders = [];
-
-    // Particle FX
     this.hitEffects = [];
 
     // Initialize Subsystems
@@ -82,23 +90,23 @@ class OpenWorldGame {
     this.buildWorld();
     this.setupResize();
 
-    // Load Default Character
-    this.loadCharacterPackage('characters/default');
+    // Start with Default Packaged Character
+    this.loadCharacterPackage('/assets/characters/default');
 
-    // Start Loop
+    // Start Main Loop
     this.animate = this.animate.bind(this);
     requestAnimationFrame(this.animate);
   }
 
   setupLights() {
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
     this.scene.add(ambientLight);
 
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444455, 0.5);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444455, 0.45);
     hemiLight.position.set(0, 50, 0);
     this.scene.add(hemiLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfffaed, 1.2);
+    const dirLight = new THREE.DirectionalLight(0xfff6e5, 1.3);
     dirLight.position.set(35, 60, 25);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 1024;
@@ -115,11 +123,11 @@ class OpenWorldGame {
   }
 
   buildWorld() {
-    // Large Ground Plane
-    const groundGeo = new THREE.PlaneGeometry(300, 300, 32, 32);
+    // Large Ground Plane (Grass)
+    const groundGeo = new THREE.PlaneGeometry(300, 300, 16, 16);
     const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x2e3a29, // Lush dark grass
-      roughness: 0.85,
+      color: 0x3d5c2a, // Rich grass
+      roughness: 0.9,
       metalness: 0.05
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -127,77 +135,75 @@ class OpenWorldGame {
     ground.receiveShadow = true;
     this.scene.add(ground);
 
-    // City Roads & Plazas (Asphalt & Markings)
-    this.createRoad(0, 0, 24, 260, 0x222428); // Main Avenue North-South
-    this.createRoad(0, 0, 260, 24, 0x222428); // Cross Boulevard East-West
+    // City Roads (Asphalt & Line Markings)
+    this.createRoad(0, 0, 22, 260, 0x22252a);
+    this.createRoad(0, 0, 260, 22, 0x22252a);
 
-    // Central Plaza Concrete Area
+    // Central Plaza Stone Floor
     const plazaGeo = new THREE.BoxGeometry(40, 0.2, 40);
-    const plazaMat = new THREE.MeshStandardMaterial({ color: 0xd6d6ce, roughness: 0.7 });
+    const plazaMat = new THREE.MeshStandardMaterial({ color: 0xc4c7cc, roughness: 0.75 });
     const plaza = new THREE.Mesh(plazaGeo, plazaMat);
     plaza.position.set(0, 0.1, 0);
     plaza.receiveShadow = true;
     this.scene.add(plaza);
 
-    // Decorative Centerpiece / Fountain base
-    const fountainGeo = new THREE.CylinderGeometry(4, 4.5, 1, 16);
-    const fountainMat = new THREE.MeshStandardMaterial({ color: 0x8c92ac, roughness: 0.5 });
+    // Center Monument Base (Cylinder Obstacle)
+    const fountainGeo = new THREE.CylinderGeometry(3.5, 4.2, 1.2, 16);
+    const fountainMat = new THREE.MeshStandardMaterial({ color: 0x6e7888, roughness: 0.6 });
     const fountain = new THREE.Mesh(fountainGeo, fountainMat);
-    fountain.position.set(0, 0.6, 0);
+    fountain.position.set(0, 0.7, 0);
     fountain.castShadow = true;
     fountain.receiveShadow = true;
     this.scene.add(fountain);
-    this.addBoxCollider(fountain.position, 8, 1.2, 8);
+    this.addBoxCollider(fountain.position, 7.5, 1.4, 7.5);
 
-    // Test Elevation Ramp
-    this.createRamp(0, 0.75, 25, 6, 1.5, 12, 0);
-    // Elevated Platform
-    const platGeo = new THREE.BoxGeometry(10, 1.5, 10);
-    const platMat = new THREE.MeshStandardMaterial({ color: 0x7c8577 });
+    // Elevation Ramp to Raised Platform
+    this.createRamp(0, 0.75, 25, 6, 1.5, 12);
+    const platGeo = new THREE.BoxGeometry(12, 1.5, 12);
+    const platMat = new THREE.MeshStandardMaterial({ color: 0x5a6358, roughness: 0.7 });
     const plat = new THREE.Mesh(platGeo, platMat);
-    plat.position.set(0, 0.75, 36);
+    plat.position.set(0, 0.75, 37);
     plat.receiveShadow = true;
     plat.castShadow = true;
     this.scene.add(plat);
-    this.addBoxCollider(plat.position, 10, 1.5, 10);
+    this.addBoxCollider(plat.position, 12, 1.5, 12);
 
-    // Buildings with Collision
-    const buildingColors = [0x50657b, 0xa39171, 0x7d8288, 0x875549, 0x3d4a54];
-    
-    // North-West Block Buildings
-    this.createBuilding(-30, 20, -30, 18, 28, 22, buildingColors[0]);
-    this.createBuilding(-55, 15, -30, 16, 20, 20, buildingColors[1]);
-    this.createBuilding(-30, 12, -60, 20, 18, 16, buildingColors[2]);
+    // City Buildings (Modular Heights and Colors)
+    const buildingColors = [0x41536b, 0x8a7960, 0x5c6670, 0x7a4b41, 0x333d45];
 
-    // North-East Block Buildings
-    this.createBuilding(35, 22, -35, 22, 32, 20, buildingColors[3]);
-    this.createBuilding(65, 14, -35, 18, 20, 18, buildingColors[0]);
-    this.createBuilding(35, 16, -65, 20, 24, 20, buildingColors[4]);
+    // North-West Block
+    this.createBuilding(-32, 16, -32, 18, 32, 20, buildingColors[0]);
+    this.createBuilding(-56, 12, -32, 16, 24, 18, buildingColors[1]);
+    this.createBuilding(-32, 10, -58, 20, 20, 16, buildingColors[2]);
 
-    // South-West Block Buildings
-    this.createBuilding(-35, 18, 35, 20, 26, 24, buildingColors[4]);
-    this.createBuilding(-65, 15, 35, 18, 22, 18, buildingColors[2]);
+    // North-East Block
+    this.createBuilding(34, 18, -34, 20, 36, 18, buildingColors[3]);
+    this.createBuilding(62, 11, -34, 18, 22, 18, buildingColors[0]);
+    this.createBuilding(34, 14, -62, 18, 28, 18, buildingColors[4]);
 
-    // South-East Block Buildings
-    this.createBuilding(40, 20, 40, 24, 30, 22, buildingColors[1]);
-    this.createBuilding(70, 16, 40, 16, 22, 18, buildingColors[3]);
+    // South-West Block
+    this.createBuilding(-34, 15, 34, 20, 30, 20, buildingColors[4]);
+    this.createBuilding(-62, 12, 34, 18, 24, 18, buildingColors[2]);
+
+    // South-East Block
+    this.createBuilding(36, 17, 36, 22, 34, 20, buildingColors[1]);
+    this.createBuilding(66, 13, 36, 16, 26, 18, buildingColors[3]);
 
     // Obstacles: Wooden Crates & Shipping Containers
-    this.createCrate(-8, 1, -8, 2, 2, 2);
-    this.createCrate(-8, 3, -8, 1.8, 1.8, 1.8);
-    this.createCrate(-6, 0.75, -8, 1.5, 1.5, 1.5);
-    this.createCrate(10, 1, -12, 2, 2, 2);
-    this.createCrate(14, 1.5, 8, 3, 3, 5, 0x2b4c7e); // Blue container
-    this.createCrate(-16, 1.5, 12, 3, 3, 6, 0x9e2a2b); // Red container
+    this.createCrate(-7, 1, -7, 2, 2, 2);
+    this.createCrate(-7, 3, -7, 1.8, 1.8, 1.8);
+    this.createCrate(-5, 0.75, -7, 1.5, 1.5, 1.5);
+    this.createCrate(9, 1, -11, 2, 2, 2);
+    this.createCrate(14, 1.5, 8, 3, 3, 6, 0x1f4477); // Blue container
+    this.createCrate(-16, 1.5, 12, 3, 3, 6, 0x8a2325); // Red container
 
-    // Decorative Rocks & Trees
-    for (let i = 0; i < 20; i++) {
-      const angle = (i / 20) * Math.PI * 2;
-      const radius = 22 + (i % 3) * 6;
+    // Trees and Boulders along sidewalks
+    for (let i = 0; i < 24; i++) {
+      const angle = (i / 24) * Math.PI * 2;
+      const radius = 22 + (i % 3) * 7;
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
-      // Don't place on roads
-      if (Math.abs(x) > 13 || Math.abs(z) > 13) {
+      if (Math.abs(x) > 12 || Math.abs(z) > 12) {
         if (i % 2 === 0) {
           this.createTree(x, z);
         } else {
@@ -216,7 +222,6 @@ class OpenWorldGame {
     mesh.receiveShadow = true;
     this.scene.add(mesh);
 
-    // Dashed center markings
     const isNS = length > width;
     const numDashes = Math.floor((isNS ? length : width) / 6);
     const dashMat = new THREE.MeshBasicMaterial({ color: 0xffd700 });
@@ -232,20 +237,16 @@ class OpenWorldGame {
 
   createBuilding(x, halfHeight, z, w, h, d, color) {
     const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshStandardMaterial({
-      color: color,
-      roughness: 0.6,
-      metalness: 0.1
-    });
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.65, metalness: 0.1 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, halfHeight, z);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.scene.add(mesh);
 
-    // Roof border
+    // Roof border trim
     const roofGeo = new THREE.BoxGeometry(w + 0.6, 0.8, d + 0.6);
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0x1f2326, roughness: 0.9 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x1d2125, roughness: 0.9 });
     const roof = new THREE.Mesh(roofGeo, roofMat);
     roof.position.set(x, halfHeight * 2 + 0.4, z);
     this.scene.add(roof);
@@ -253,9 +254,9 @@ class OpenWorldGame {
     this.addBoxCollider(mesh.position, w, h, d);
   }
 
-  createCrate(x, y, z, w, h, d, color = 0x8b5a2b) {
+  createCrate(x, y, z, w, h, d, color = 0x7c4e24) {
     const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.8 });
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
     const crate = new THREE.Mesh(geo, mat);
     crate.position.set(x, y, z);
     crate.castShadow = true;
@@ -264,12 +265,12 @@ class OpenWorldGame {
     this.addBoxCollider(crate.position, w, h, d);
   }
 
-  createRamp(x, y, z, w, h, l, angle) {
+  createRamp(x, y, z, w, h, l) {
     const geo = new THREE.BoxGeometry(w, h, l);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x999988, roughness: 0.8 });
+    const mat = new THREE.MeshStandardMaterial({ color: 0x888877, roughness: 0.8 });
     const ramp = new THREE.Mesh(geo, mat);
     ramp.position.set(x, y, z);
-    ramp.rotation.x = -0.15; // gentle slope
+    ramp.rotation.x = -0.15;
     ramp.receiveShadow = true;
     ramp.castShadow = true;
     this.scene.add(ramp);
@@ -277,16 +278,16 @@ class OpenWorldGame {
 
   createTree(x, z) {
     const trunkGeo = new THREE.CylinderGeometry(0.35, 0.5, 3.5, 8);
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 });
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3328, roughness: 0.9 });
     const trunk = new THREE.Mesh(trunkGeo, trunkMat);
     trunk.position.set(x, 1.75, z);
     trunk.castShadow = true;
     this.scene.add(trunk);
 
-    const leavesGeo = new THREE.DodecahedronGeometry(2.2, 1);
-    const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2e5c1e, roughness: 0.7 });
+    const leavesGeo = new THREE.DodecahedronGeometry(2.3, 1);
+    const leavesMat = new THREE.MeshStandardMaterial({ color: 0x245517, roughness: 0.75 });
     const leaves = new THREE.Mesh(leavesGeo, leavesMat);
-    leaves.position.set(x, 4.2, z);
+    leaves.position.set(x, 4.3, z);
     leaves.castShadow = true;
     this.scene.add(leaves);
 
@@ -295,7 +296,7 @@ class OpenWorldGame {
 
   createRock(x, z) {
     const geo = new THREE.DodecahedronGeometry(1.2, 0);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x7a7a7a, roughness: 0.9 });
+    const mat = new THREE.MeshStandardMaterial({ color: 0x6e6e6e, roughness: 0.9 });
     const rock = new THREE.Mesh(geo, mat);
     rock.position.set(x, 0.6, z);
     rock.scale.set(1.4, 0.8, 1.2);
@@ -315,13 +316,12 @@ class OpenWorldGame {
 
   // Load Character Model & Retarget Animations
   async loadCharacterPackage(baseDir) {
-    console.log('[OpenWorldGame] Loading character from:', baseDir);
-    this.notifyStateChange('LOADING_CHARACTER', `Loading: ${baseDir}`);
+    console.log('[OpenWorldGame] Loading character package:', baseDir);
+    this.notifyStateChange('LOADING', `Loading: ${baseDir}`);
 
     try {
-      // Manifest load
       let manifest = {
-        name: 'Character',
+        name: 'Mutant (Default)',
         model: 'model/character.glb',
         animations: {
           idle: 'animations/idle.glb',
@@ -338,7 +338,7 @@ class OpenWorldGame {
           manifest = await res.json();
         }
       } catch (e) {
-        console.warn('[OpenWorldGame] Using default manifest mapping:', e);
+        console.warn('[OpenWorldGame] Manifest fetch error, fallback to defaults:', e);
       }
 
       // Load 3D model
@@ -346,7 +346,6 @@ class OpenWorldGame {
       const gltf = await this.loadGLTF(modelUrl);
       const newModel = gltf.scene;
 
-      // Adjust model scale & shadow settings
       newModel.traverse(node => {
         if (node.isMesh) {
           node.castShadow = true;
@@ -358,7 +357,7 @@ class OpenWorldGame {
         }
       });
 
-      // Normalize bone names if needed
+      // Gather bone names for retargeting
       const boneMap = new Set();
       newModel.traverse(node => {
         if (node.isBone) {
@@ -366,12 +365,12 @@ class OpenWorldGame {
         }
       });
 
-      // Load Animation Clips
+      // Load Animations
       const animKeys = ['idle', 'walk', 'attack1', 'attack2', 'attack3'];
       const loadedClips = {};
 
       for (const key of animKeys) {
-        const animRelPath = manifest.animations[key];
+        const animRelPath = manifest.animations ? manifest.animations[key] : null;
         if (!animRelPath) {
           throw new Error(`Missing ${key} animation in manifest.`);
         }
@@ -381,18 +380,19 @@ class OpenWorldGame {
           if (animGltf.animations && animGltf.animations.length > 0) {
             const clip = animGltf.animations[0];
             clip.name = key;
-            this.normalizeTrackNames(clip, boneMap);
+            const isLocomotion = (key === 'walk' || key === 'idle');
+            this.normalizeTrackNames(clip, boneMap, isLocomotion);
             loadedClips[key] = clip;
           } else {
             throw new Error(`No animation track found in ${animRelPath}`);
           }
         } catch (err) {
-          console.error(`Failed to load animation ${key}:`, err);
-          throw new Error(`Failed to load ${key} (${err.message})`);
+          console.error(`Failed loading animation ${key}:`, err);
+          throw new Error(`Animation ${key} failed to load (${err.message})`);
         }
       }
 
-      // Replace active character mesh & animation mixer
+      // Cleanup previous character
       if (this.characterModel) {
         this.player.remove(this.characterModel);
         if (this.mixer) {
@@ -419,31 +419,30 @@ class OpenWorldGame {
         this.actions[key] = action;
       }
 
-      // Listen for animation completion events for combat combo chaining
       this.mixer.addEventListener('finished', (e) => {
         this.onAnimationFinished(e.action);
       });
 
-      // Set initial state to IDLE
+      // Start in IDLE state
       this.currentState = GAME_STATE.IDLE;
       this.activeAction = this.actions.idle;
       this.activeAction.play();
 
-      console.log('[OpenWorldGame] Character loaded successfully:', manifest.name);
+      console.log('[OpenWorldGame] Successfully loaded:', manifest.name);
       if (window.AndroidBridge && window.AndroidBridge.onCharacterLoaded) {
         window.AndroidBridge.onCharacterLoaded(manifest.name);
       }
-      this.notifyStateChange(this.currentState, `Loaded: ${manifest.name}`);
+      this.notifyStateChange(this.currentState, manifest.name);
 
     } catch (error) {
-      console.error('[OpenWorldGame] Character loading error:', error);
+      console.error('[OpenWorldGame] Character load error:', error);
       if (window.AndroidBridge && window.AndroidBridge.onCharacterError) {
-        window.AndroidBridge.onCharacterError(error.message || 'Unknown error loading character');
+        window.AndroidBridge.onCharacterError(error.message || 'Error loading character mod');
       }
-      // If failed and not default, safely revert to default
-      if (baseDir !== 'characters/default') {
-        console.warn('[OpenWorldGame] Safely falling back to default character.');
-        this.loadCharacterPackage('characters/default');
+      // Revert safely to default if not already default
+      if (baseDir !== '/assets/characters/default') {
+        console.warn('[OpenWorldGame] Reverting safely to default Mutant character');
+        this.loadCharacterPackage('/assets/characters/default');
       }
     }
   }
@@ -454,8 +453,7 @@ class OpenWorldGame {
     });
   }
 
-  normalizeTrackNames(clip, boneMap) {
-    // Check if bones in model have prefix like "mixamorig:" while clip has "mixamorig" or vice versa
+  normalizeTrackNames(clip, boneMap, isLocomotion = false) {
     clip.tracks.forEach(track => {
       const dotIndex = track.name.indexOf('.');
       if (dotIndex > 0) {
@@ -463,23 +461,31 @@ class OpenWorldGame {
         const prop = track.name.substring(dotIndex);
 
         if (!boneMap.has(boneName)) {
-          // Try adding or removing colon
           let candidate = boneName.replace('mixamorig:', 'mixamorig');
           if (boneMap.has(candidate)) {
             track.name = candidate + prop;
-            return;
+          } else {
+            candidate = boneName.replace('mixamorig', 'mixamorig:');
+            if (boneMap.has(candidate)) {
+              track.name = candidate + prop;
+            }
           }
-          candidate = boneName.replace('mixamorig', 'mixamorig:');
-          if (boneMap.has(candidate)) {
-            track.name = candidate + prop;
-            return;
-          }
+        }
+      }
+
+      // If this is a locomotion/walking animation, neutralize root horizontal translation (X and Z)
+      // to eliminate root motion snapping while preserving natural vertical hip bobbing (Y).
+      if (isLocomotion && track.name.endsWith('.position')) {
+        const vals = track.values;
+        const count = vals.length / 3;
+        for (let i = 0; i < count; i++) {
+          vals[i * 3] = 0;     // X offset centered
+          vals[i * 3 + 2] = 0; // Z offset centered (prevents snap back upon loop)
         }
       }
     });
   }
 
-  // Animation Transition System with smooth cross-fade
   fadeToAction(name, duration = 0.18) {
     const nextAction = this.actions[name];
     if (!nextAction || nextAction === this.activeAction) return;
@@ -495,23 +501,16 @@ class OpenWorldGame {
 
   // Melee Combat Combo Trigger
   triggerAttack() {
-    console.log('[OpenWorldGame] Attack triggered. Current state:', this.currentState);
-
     if (this.currentState === GAME_STATE.IDLE || this.currentState === GAME_STATE.WALK) {
-      // Start combo: Attack 1 (Jab Cross)
       this.startAttack(GAME_STATE.ATTACK_1, 'attack1');
     } else if (this.currentState === GAME_STATE.ATTACK_1) {
-      // Within combo window: Queue Attack 2 (Light Hit To Head)
       if (this.attackProgress >= 0.25 && this.attackProgress <= 0.85) {
         this.queuedAttack = { state: GAME_STATE.ATTACK_2, actionName: 'attack2' };
-        console.log('[OpenWorldGame] Combo queued: ATTACK_2');
         this.spawnComboFeedback(2);
       }
     } else if (this.currentState === GAME_STATE.ATTACK_2) {
-      // Within combo window: Queue Attack 3 (Punching)
       if (this.attackProgress >= 0.25 && this.attackProgress <= 0.85) {
         this.queuedAttack = { state: GAME_STATE.ATTACK_3, actionName: 'attack3' };
-        console.log('[OpenWorldGame] Combo queued: ATTACK_3');
         this.spawnComboFeedback(3);
       }
     }
@@ -527,20 +526,16 @@ class OpenWorldGame {
     this.currentAttackDuration = action ? action.getClip().duration : 0.8;
     this.attackLockTimer = this.currentAttackDuration;
 
-    // Spawn impact particles at character front
     this.spawnHitEffect();
-
-    this.notifyStateChange(this.currentState, `Combo Hit: ${actionName.toUpperCase()}`);
+    this.notifyStateChange(this.currentState, `Combo: ${actionName.toUpperCase()}`);
   }
 
-  onAnimationFinished(finishedAction) {
-    // If attack finished
+  onAnimationFinished(action) {
     if (this.isAttackState(this.currentState)) {
       if (this.queuedAttack) {
         const next = this.queuedAttack;
         this.startAttack(next.state, next.actionName);
       } else {
-        // Return to IDLE or WALK based on joystick input
         this.returnToLocomotion();
       }
     }
@@ -562,18 +557,16 @@ class OpenWorldGame {
     return state === GAME_STATE.ATTACK_1 || state === GAME_STATE.ATTACK_2 || state === GAME_STATE.ATTACK_3;
   }
 
-  // Visual Hit & Combo Effects
   spawnHitEffect() {
     const flashGeo = new THREE.SphereGeometry(0.35, 8, 8);
     const flashMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.9 });
     const flash = new THREE.Mesh(flashGeo, flashMat);
 
-    // Position ~1.1m in front of player at chest height
     const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.player.rotation.y);
     flash.position.copy(this.player.position).add(forward.multiplyScalar(0.9)).add(new THREE.Vector3(0, 1.3, 0));
     this.scene.add(flash);
 
-    this.hitEffects.push({ mesh: flash, life: 0.25, maxLife: 0.25 });
+    this.hitEffects.push({ mesh: flash, life: 0.22, maxLife: 0.22 });
   }
 
   spawnComboFeedback(hitNumber) {
@@ -596,7 +589,6 @@ class OpenWorldGame {
   setJoystickInput(x, y) {
     this.inputVector.set(x, y);
 
-    // If currently not attacking, update locomotion state
     if (!this.isAttackState(this.currentState)) {
       if (this.inputVector.length() > 0.05) {
         if (this.currentState !== GAME_STATE.WALK) {
@@ -614,20 +606,25 @@ class OpenWorldGame {
     }
   }
 
-  rotateCamera(deltaX, deltaY) {
-    this.cameraYaw -= deltaX * 0.005;
-    this.cameraPitch = Math.max(-0.4, Math.min(1.1, this.cameraPitch + deltaY * 0.005));
+  triggerJump() {
+    if (this.isGrounded) {
+      this.verticalVelocity = 7.0;
+      this.isGrounded = false;
+    }
   }
 
-  // Physics & Collision Update
+  rotateCamera(deltaX, deltaY) {
+    this.cameraYaw -= deltaX * 0.005;
+    this.cameraPitch = Math.max(-0.35, Math.min(1.05, this.cameraPitch + deltaY * 0.005));
+  }
+
   updatePhysics(delta) {
-    // Gravity & Ground Check
+    // Gravity & Ground Height
     this.verticalVelocity -= 18.0 * delta;
     let nextY = this.player.position.y + this.verticalVelocity * delta;
 
     let groundLevel = 0;
-    // Check if on elevated platform or ramp
-    if (this.player.position.z >= 31 && this.player.position.z <= 41 && Math.abs(this.player.position.x) <= 5) {
+    if (this.player.position.z >= 31 && this.player.position.z <= 43 && Math.abs(this.player.position.x) <= 6) {
       groundLevel = 1.5;
     } else if (this.player.position.z >= 19 && this.player.position.z < 31 && Math.abs(this.player.position.x) <= 3) {
       const t = (this.player.position.z - 19) / 12;
@@ -641,62 +638,107 @@ class OpenWorldGame {
     }
     this.player.position.y = nextY;
 
-    // Locomotion relative to camera
-    const inputLen = this.inputVector.length();
-    if (inputLen > 0.05 && !this.isAttackState(this.currentState)) {
-      // Calculate move direction relative to camera yaw
-      const moveAngle = Math.atan2(this.inputVector.x, this.inputVector.y) + this.cameraYaw;
+    // Smooth input interpolation for silky smooth acceleration and transitions
+    const lerpFactor = Math.min(1.0, delta * 15.0);
+    this.smoothedInput.lerp(this.inputVector, lerpFactor);
+
+    // Movement relative to camera heading
+    const inputLen = this.smoothedInput.length();
+    if (inputLen > 0.04 && !this.isAttackState(this.currentState)) {
+      // Joystick: x is horizontal (-1 left, +1 right), y is forward (+1 forward, -1 backward)
+      // Camera heading: cameraYaw is where camera is looking from / facing
+      const moveAngle = Math.atan2(this.smoothedInput.x, this.smoothedInput.y) + this.cameraYaw;
       const speed = Math.min(inputLen, 1.0) * this.moveSpeed;
 
       const moveX = Math.sin(moveAngle) * speed * delta;
       const moveZ = Math.cos(moveAngle) * speed * delta;
 
-      // Smooth Character Facing Direction
-      const targetAngle = moveAngle;
-      let diff = targetAngle - this.player.rotation.y;
+      // Smoothly rotate character toward movement heading without jitter
+      let diff = moveAngle - this.player.rotation.y;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      this.player.rotation.y += diff * Math.min(1.0, delta * 12);
+      this.player.rotation.y += diff * Math.min(1.0, delta * 14);
 
-      // Environment Collision Test (Sphere vs Box)
-      const nextPos = this.player.position.clone().add(new THREE.Vector3(moveX, 0, moveZ));
-      let collided = false;
+      // Robust Collision Resolution: Test X and Z movements independently to allow sliding along walls
+      const rad = this.playerRadius;
 
+      // 1. Try X movement
+      let canMoveX = true;
+      const testPosX = this.player.position.x + moveX;
+      const currentZ = this.player.position.z;
       for (const box of this.colliders) {
-        // Expand box by player radius
-        const expandedBox = box.clone().expandByScalar(this.playerRadius);
-        if (expandedBox.containsPoint(nextPos)) {
-          collided = true;
-          // Slide along axes
-          const testX = this.player.position.clone().add(new THREE.Vector3(moveX, 0, 0));
-          const testZ = this.player.position.clone().add(new THREE.Vector3(0, 0, moveZ));
-          if (!expandedBox.containsPoint(testX)) {
-            this.player.position.x += moveX;
-          } else if (!expandedBox.containsPoint(testZ)) {
-            this.player.position.z += moveZ;
-          }
+        if (
+          testPosX + rad > box.min.x &&
+          testPosX - rad < box.max.x &&
+          currentZ + rad > box.min.z &&
+          currentZ - rad < box.max.z
+        ) {
+          canMoveX = false;
           break;
         }
       }
-
-      if (!collided) {
+      if (canMoveX) {
         this.player.position.x += moveX;
+      }
+
+      // 2. Try Z movement
+      let canMoveZ = true;
+      const currentX = this.player.position.x;
+      const testPosZ = this.player.position.z + moveZ;
+      for (const box of this.colliders) {
+        if (
+          currentX + rad > box.min.x &&
+          currentX - rad < box.max.x &&
+          testPosZ + rad > box.min.z &&
+          testPosZ - rad < box.max.z
+        ) {
+          canMoveZ = false;
+          break;
+        }
+      }
+      if (canMoveZ) {
         this.player.position.z += moveZ;
       }
+
+      // 3. Safety Penetration Resolution: If player ever intersects an obstacle bounding box, push them out
+      for (const box of this.colliders) {
+        const px = this.player.position.x;
+        const pz = this.player.position.z;
+        if (
+          px + rad > box.min.x &&
+          px - rad < box.max.x &&
+          pz + rad > box.min.z &&
+          pz - rad < box.max.z
+        ) {
+          const overlapLeft = (px + rad) - box.min.x;
+          const overlapRight = box.max.x - (px - rad);
+          const overlapBottom = (pz + rad) - box.min.z;
+          const overlapTop = box.max.z - (pz - rad);
+          const minOverlap = Math.min(overlapLeft, overlapRight, overlapBottom, overlapTop);
+
+          if (minOverlap === overlapLeft) {
+            this.player.position.x = box.min.x - rad - 0.01;
+          } else if (minOverlap === overlapRight) {
+            this.player.position.x = box.max.x + rad + 0.01;
+          } else if (minOverlap === overlapBottom) {
+            this.player.position.z = box.min.z - rad - 0.01;
+          } else {
+            this.player.position.z = box.max.z + rad + 0.01;
+          }
+        }
+      }
     } else if (this.isAttackState(this.currentState)) {
-      // Slight forward momentum step during attack
+      // Forward momentum during attack swing
       const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.player.rotation.y);
-      const step = forward.multiplyScalar(delta * 0.8);
+      const step = forward.multiplyScalar(delta * 0.7);
       this.player.position.add(step);
     }
   }
 
-  // Third-Person Follow Camera Update
   updateCamera(delta) {
     const targetHeight = 1.4;
     const targetPos = this.player.position.clone().add(new THREE.Vector3(0, targetHeight, 0));
 
-    // Calculate ideal camera position based on Yaw and Pitch
     const horizDist = this.cameraDistance * Math.cos(this.cameraPitch);
     const vertDist = this.cameraDistance * Math.sin(this.cameraPitch);
 
@@ -705,11 +747,9 @@ class OpenWorldGame {
     const desiredZ = targetPos.z - Math.cos(this.cameraYaw) * horizDist;
     const desiredPos = new THREE.Vector3(desiredX, desiredY, desiredZ);
 
-    // Smooth camera lag/follow
     this.camera.position.lerp(desiredPos, Math.min(1.0, delta * 10));
     this.camera.lookAt(targetPos);
 
-    // Keep sunlight aligned with player to prevent shadow clipping
     if (this.sunLight) {
       this.sunLight.position.set(this.player.position.x + 35, 60, this.player.position.z + 25);
       this.sunLight.target.position.copy(this.player.position);
@@ -744,12 +784,10 @@ class OpenWorldGame {
     requestAnimationFrame(this.animate);
     const delta = Math.min(this.clock.getDelta(), 0.1);
 
-    // Update Animation Mixer
     if (this.mixer) {
       this.mixer.update(delta);
     }
 
-    // Track Attack Progress
     if (this.isAttackState(this.currentState)) {
       this.attackLockTimer -= delta;
       this.attackProgress = 1.0 - Math.max(0, this.attackLockTimer / this.currentAttackDuration);
@@ -766,7 +804,6 @@ class OpenWorldGame {
   }
 }
 
-// Global API exposed to Android WebView
 window.initGame = () => {
   window.gameInstance = new OpenWorldGame();
 };
@@ -777,6 +814,9 @@ window.GameAPI = {
   },
   triggerAttack: () => {
     if (window.gameInstance) window.gameInstance.triggerAttack();
+  },
+  triggerJump: () => {
+    if (window.gameInstance) window.gameInstance.triggerJump();
   },
   rotateCamera: (dx, dy) => {
     if (window.gameInstance) window.gameInstance.rotateCamera(dx, dy);
