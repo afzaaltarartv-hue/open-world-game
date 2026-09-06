@@ -1,0 +1,6 @@
+{
+  "name": "OpenWorld 3D",
+  "description": "Third-person 3D open-world game prototype with melee combat combo system, touch controls, and character modding.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
